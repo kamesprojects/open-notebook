@@ -17,8 +17,9 @@ Environment Variables:
 import os
 import re
 from enum import Enum
+from functools import lru_cache
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from langchain_text_splitters import (
     HTMLHeaderTextSplitter,
@@ -385,27 +386,35 @@ def _get_markdown_splitter() -> MarkdownHeaderTextSplitter:
     )
 
 
-def _get_plain_splitter() -> RecursiveCharacterTextSplitter:
+# def _get_plain_splitter()
+def _get_plain_splitter(
+    length_function: Callable[[str], int] = token_count,
+) -> RecursiveCharacterTextSplitter:
     """Get plain text splitter using CHUNK_SIZE and CHUNK_OVERLAP constants."""
     return RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE,
         chunk_overlap=CHUNK_OVERLAP,
-        length_function=token_count,
+        # length_function=token_count,
+        length_function=length_function,
         separators=["\n\n", "\n", ". ", ", ", " ", ""],
     )
 
 
-def _apply_secondary_chunking(chunks: List[str]) -> List[str]:
+# def _apply_secondary_chunking(chunks: List[str]) -> List[str]:
+def _apply_secondary_chunking(
+    chunks: List[str], count: Callable[[str], int] = token_count
+) -> List[str]:
     """
     Apply secondary chunking to ensure no chunk exceeds CHUNK_SIZE tokens.
 
     Used when primary splitters (HTML/Markdown) produce oversized chunks.
     """
     result = []
-    secondary_splitter = _get_plain_splitter()
+    secondary_splitter = _get_plain_splitter(count)
 
     for chunk in chunks:
-        if token_count(chunk) > CHUNK_SIZE:
+        # if token_count(chunk) > CHUNK_SIZE:
+        if count(chunk) > CHUNK_SIZE:
             # Split oversized chunk
             sub_chunks = secondary_splitter.split_text(chunk)
             result.extend(sub_chunks)
@@ -434,8 +443,12 @@ def chunk_text(
     if not text or not text.strip():
         return []
 
+    # Splitters measure the same pieces several times; count each text once.
+    count = lru_cache(maxsize=None)(token_count)
+
     # Short text doesn't need chunking
-    text_tokens = token_count(text)
+    # text_tokens = token_count(text)
+    text_tokens = count(text)
     if text_tokens <= CHUNK_SIZE:
         return [text]
 
@@ -465,11 +478,13 @@ def chunk_text(
         ]
     else:
         # Plain text - use recursive splitter directly
-        chunks = _get_plain_splitter().split_text(text)
+        # chunks = _get_plain_splitter().split_text(text)
+        chunks = _get_plain_splitter(count).split_text(text)
 
     # Apply secondary chunking if needed (for HTML/Markdown that may produce large chunks)
     if content_type in (ContentType.HTML, ContentType.MARKDOWN):
-        chunks = _apply_secondary_chunking(chunks)
+        # chunks = _apply_secondary_chunking(chunks)
+        chunks = _apply_secondary_chunking(chunks, count)
 
     # Filter out empty chunks
     chunks = [c.strip() for c in chunks if c and c.strip()]
@@ -481,7 +496,8 @@ def chunk_text(
     # Only filter when more than one chunk exists and at least one chunk
     # would survive — never return an empty list because of this filter.
     if MIN_CHUNK_SIZE > 0 and len(chunks) > 1:
-        kept = [c for c in chunks if token_count(c) >= MIN_CHUNK_SIZE]
+        # kept = [c for c in chunks if token_count(c) >= MIN_CHUNK_SIZE]
+        kept = [c for c in chunks if count(c) >= MIN_CHUNK_SIZE]
         if kept:
             dropped = len(chunks) - len(kept)
             if dropped > 0:
